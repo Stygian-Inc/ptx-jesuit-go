@@ -1,0 +1,113 @@
+// PTX: The Portable Trust eXtensible file format
+// Version: 1.0 
+//
+// This schema defines the structure for a PTX file, a self-contained,
+// non-interactive proof container designed for verifiable claims.
+//
+// A valid PTX file is a binary file composed of two parts:
+// 1. A 4-byte magic header: "PTX\x01" (Hex: 50 54 58 01)
+// 2. The serialized Protobuf message for the PtxFile defined below.
+
+syntax = "proto3";
+
+package ptx.v1;
+
+option go_package = "github.com/Stygian-Inc/ptx-jesuit-go/ptx";
+
+// PtxFile is the root message of the entire file format. It encapsulates
+// the cryptographic proof, the human-readable metadata, the anchor details,
+// and an optional institutional signature for platform attestation.
+message PtxFile {
+  
+  // The trust method used to anchor this proof. This determines which field in
+  // the 'anchor' oneof should be populated and how a verifier should locate
+  // the public commitment.
+  TrustMethod trust_method = 1;
+  
+  // The core zero-knowledge proof and its system-specific parameters.
+  ZkProof proof = 2;
+  
+  // The signed metadata payload, which represents the "claim" that the proof
+  // attests to. It is RECOMMENDED that this field contain a JWS (JSON Web
+  // Signature) compact serialization string. The JWS payload should contain
+  // the rich context, including the 'entities' and security-critical 'purpose' objects.
+  string signed_metadata = 3;
+
+  // The anchor contains the details needed to locate the public commitment.
+  // The specific message used here MUST correspond to the 'trust_method'.
+  oneof anchor {
+    DohAnchor doh_details = 4;
+    GistAnchor gist_details = 5;
+    // Future anchor methods can be added here without breaking compatibility.
+  }
+
+  // OPTIONAL: A signature made by a trusted platform or institution.
+  // This provides a powerful layer of provenance, attesting that the platform
+  // has successfully verified the inner proof. It is used by end-verifiers
+  // (e.g., a university) to trust that the proof originated from a known
+  // intermediary (e.g., Common App).
+  IssuerSignature issuer_signature = 6;
+}
+
+// TrustMethod defines the public, auditable system used to anchor the commitment.
+enum TrustMethod {
+  METHOD_UNSPECIFIED = 0; // Invalid, must be explicitly set.
+  DOH = 1;                // DNS TXT Record method via Domain of Interest.
+  GIST = 2;               // GitHub Gist method.
+}
+
+// ZkProof encapsulates the proof data and the necessary context for verification.
+message ZkProof {
+  
+  // The underlying ZKP system used to generate this proof. The verifier MUST
+  // use this to select the correct verification algorithm.
+  ProofSystem proof_system = 1;
+
+  // An identifier for the verification key (and its associated circuit).
+  // This could be a hash of the VK, a URL, or a versioned name (e.g.,
+  // "doh-v1.0-main"). The verifier uses this to fetch or select the correct
+  // verification key for the specified proof_system.
+  string verification_key_id = 2;
+  
+  // The raw proof data, serialized according to the specified proof_system.
+  bytes proof_data = 3;
+}
+
+// ProofSystem defines the supported zero-knowledge proof systems.
+enum ProofSystem {
+  SYSTEM_UNSPECIFIED = 0; // Invalid, must be explicitly set.
+  GROTH16 = 1;
+  PLONK = 2;
+  STARK = 3; // Example for future extensibility.
+}
+
+// IssuerSignature encapsulates an X.509 signature and the certificate chain
+// needed to verify it, leveraging the existing WebPKI trust infrastructure.
+message IssuerSignature {
+  // An identifier for the signature algorithm used, corresponding to standards
+  // recognized by X.509, e.g., "SHA256withRSA".
+  string signature_algorithm = 1;
+
+  // The raw signature bytes. This signature is calculated over the entire
+  // serialized PtxFile message, with this 'issuer_signature' field itself
+  // being empty during the calculation to create a canonical payload.
+  bytes signature = 2;
+
+  // The chain of X.509 certificates required to verify the signature.
+  // The first certificate MUST be the leaf certificate whose private key
+  // created the signature. Each subsequent certificate certifies the one
+  // preceding it. Certificates should be in the binary DER format.
+  repeated bytes certificate_chain = 3;
+}
+
+// DohAnchor contains the details required for the DoH (DNS) trust method.
+message DohAnchor {
+  // The fully qualified domain name that anchors the proof, e.g., "example.com".
+  string domain_name = 1;
+}
+
+// GistAnchor contains the details required for the GIST (GitHub Gist) trust method.
+message GistAnchor {
+  // The full URL of the public gist, e.g., "https://gist.github.com/user/id".
+  string gist_url = 1;
+}
