@@ -1,15 +1,13 @@
 package crypto
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"math/big"
 
-	"crypto/rand"
-
 	"github.com/consensys/gnark-crypto/ecc/bn254/fr"
-	"github.com/iden3/go-iden3-crypto/poseidon"
 )
 
 var (
@@ -58,24 +56,6 @@ func SplitHashToFieldElements(hexString string) (*fr.Element, *fr.Element) {
 	return &p1, &p2
 }
 
-// PoseidonHash computes the Poseidon hash of the given field elements
-func PoseidonHash(inputs []*fr.Element) (*fr.Element, error) {
-	in := make([]*big.Int, len(inputs))
-	for i, v := range inputs {
-		in[i] = new(big.Int)
-		v.BigInt(in[i])
-	}
-
-	res, err := poseidon.Hash(in)
-	if err != nil {
-		return nil, err
-	}
-
-	var hash fr.Element
-	hash.SetBigInt(res)
-	return &hash, nil
-}
-
 // Base27 encodes a big integer into a base27 string using the alphabet "abcdefghijklmnopqrstuvwxyz-"
 func Base27(n *big.Int) string {
 	const alphabet = "abcdefghijklmnopqrstuvwxyz-"
@@ -107,7 +87,6 @@ func Base27(n *big.Int) string {
 // DeriveHostnameFromCommitment derives the hostname from the commitment (fr.Element)
 func DeriveHostnameFromCommitment(commitment *fr.Element, domain string) (string, error) {
 	// To 32-bytes Little Endian Buffer
-	// Reference: commitmentBuff = leInt2Buff(commitment, 32)
 	bytes := commitment.Bytes() // This is usually Big Endian in gnark-crypto
 
 	// Convert to Little Endian
@@ -120,9 +99,29 @@ func DeriveHostnameFromCommitment(commitment *fr.Element, domain string) (string
 	hashBytes := sha256.Sum256(leBytes)
 
 	// Base27 of hash
-	n := new(big.Int).SetBytes(hashBytes[:]) // reference uses LargeInteger = BigInt('0x' + hexString)
-	// Base27 function takes big.Int
+	n := new(big.Int).SetBytes(hashBytes[:])
 	encoded := Base27(n)
 
 	return fmt.Sprintf("x%sx", encoded), nil
+}
+
+// PoseidonHashString computes field element from string (domain) matching prover logic
+// This is SHA256(string) mod SNARK_FIELD_SIZE (NOT Poseidon hash applied)
+func PoseidonHashString(s string) (*fr.Element, error) {
+	// Convert string to field element via SHA256 -> mod SNARK_FIELD
+	hashBytes := sha256.Sum256([]byte(s))
+	hashInt := new(big.Int).SetBytes(hashBytes[:])
+	// Note: SetBigInt automatically reduces mod field size
+
+	var result fr.Element
+	result.SetBigInt(hashInt)
+
+	return &result, nil
+}
+
+// SplitMetadataHash computes SHA256 of metadata and splits into two 128-bit parts
+func SplitMetadataHash(metaRaw string) (*fr.Element, *fr.Element) {
+	hashBytes := sha256.Sum256([]byte(metaRaw))
+	hashHex := hex.EncodeToString(hashBytes[:])
+	return SplitHashToFieldElements(hashHex)
 }

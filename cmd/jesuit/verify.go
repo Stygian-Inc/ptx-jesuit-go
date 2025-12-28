@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Stygian-Inc/ptx-jesuit-go/pkg/crypto"
 	"github.com/Stygian-Inc/ptx-jesuit-go/pkg/ptxloader"
 	"github.com/Stygian-Inc/ptx-jesuit-go/pkg/verifier"
 	"github.com/Stygian-Inc/ptx-jesuit-go/pkg/vk"
@@ -90,6 +91,34 @@ var verifyCmd = &cobra.Command{
 			if res.Success {
 				printHeader("Verification Successful")
 				color.New(color.BgBlue, color.FgWhite).Printf("   ALL CHECKS PASSED   \n")
+			}
+
+			if verbose {
+				printSection("5. Verified Value Details")
+				fmt.Printf("   %s\n", color.CyanString("FQDN (ASCII):"))
+				fmt.Printf("      %s\n", res.Details.Fqdn)
+				fmt.Printf("   %s\n", color.CyanString("FQDN Hash (Decimal):"))
+				fmt.Printf("      %s\n", res.Details.FqdnHash)
+
+				fmt.Printf("   %s\n", color.CyanString("Metadata JSON (ASCII):"))
+				fmt.Printf("      %s\n", res.Details.MetadataJSON)
+				fmt.Printf("   %s\n", color.CyanString("Metadata Hash P1 (Decimal):"))
+				fmt.Printf("      %s\n", res.Details.MetadataHashP1)
+				fmt.Printf("   %s\n", color.CyanString("Metadata Hash P2 (Decimal):"))
+				fmt.Printf("      %s\n", res.Details.MetadataHashP2)
+
+				fmt.Printf("   %s\n", color.CyanString("Nullifier Hash (Decimal):"))
+				fmt.Printf("      %s\n", res.Details.NullifierHash)
+				fmt.Printf("   %s\n", color.CyanString("Commitment (Decimal):"))
+				fmt.Printf("      %s\n", res.Details.Commitment)
+
+				fmt.Printf("   %s\n", color.CyanString("Trust Method (Value):"))
+				fmt.Printf("      %s\n", res.Details.TrustMethod)
+
+				fmt.Printf("   %s\n", color.CyanString("Derived Hostname (from Commitment):"))
+				fmt.Printf("      %s\n", res.Dns.DerivedHostname)
+				fmt.Printf("   %s\n", color.CyanString("Expected TXT Record Content (SHA256):"))
+				fmt.Printf("      %s\n", crypto.Sha256Hex([]byte(res.Details.MetadataJSON)))
 			}
 		}
 

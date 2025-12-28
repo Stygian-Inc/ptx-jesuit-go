@@ -1,11 +1,17 @@
 package verifier
 
 import (
+	"bytes"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math/big"
+	"os"
 	"strings"
 	"time"
 
+	"github.com/Stygian-Inc/ptx-jesuit-go/pkg/circuit"
+	"github.com/Stygian-Inc/ptx-jesuit-go/pkg/crypto"
 	"github.com/Stygian-Inc/ptx-jesuit-go/pkg/dns"
 	"github.com/Stygian-Inc/ptx-jesuit-go/pkg/nonce"
 	"github.com/Stygian-Inc/ptx-jesuit-go/pkg/ptxloader"
@@ -13,8 +19,53 @@ import (
 	"github.com/Stygian-Inc/ptx-jesuit-go/pkg/utils"
 	"github.com/Stygian-Inc/ptx-jesuit-go/pkg/vk"
 	"github.com/Stygian-Inc/ptx-jesuit-go/ptx"
+	"github.com/consensys/gnark-crypto/ecc"
+	"github.com/consensys/gnark/backend/groth16"
+	"github.com/consensys/gnark/constraint"
+	"github.com/consensys/gnark/frontend"
+	"github.com/consensys/gnark/frontend/cs/r1cs"
 	"github.com/vocdoni/circom2gnark/parser"
 )
+
+const nativeVKPath = "native.vk"
+
+// loadCachedVK loads the verification key from cache or runs setup if not found
+func loadCachedVK(ccs constraint.ConstraintSystem) (groth16.VerifyingKey, error) {
+	// Try to load existing VK
+	if _, err := os.Stat(nativeVKPath); err == nil {
+		vkFile, err := os.Open(nativeVKPath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to open vk file: %w", err)
+		}
+		defer vkFile.Close()
+
+		vk := groth16.NewVerifyingKey(ecc.BN254)
+		if _, err := vk.ReadFrom(vkFile); err != nil {
+			return nil, fmt.Errorf("failed to read vk: %w", err)
+		}
+		return vk, nil
+	}
+
+	// VK doesn't exist, must generate (first run or keys missing)
+	// Note: This will create different keys than the prover if called first!
+	_, vk, err := groth16.Setup(ccs)
+	if err != nil {
+		return nil, fmt.Errorf("setup failed: %w", err)
+	}
+
+	// Save VK for future use
+	vkFile, err := os.Create(nativeVKPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create vk file: %w", err)
+	}
+	defer vkFile.Close()
+
+	if _, err := vk.WriteTo(vkFile); err != nil {
+		return nil, fmt.Errorf("failed to write vk: %w", err)
+	}
+
+	return vk, nil
+}
 
 type VerificationOptions struct {
 	FilePath         string
@@ -30,6 +81,18 @@ type VerificationResult struct {
 	Errors  []string
 	Dns     DnsResult
 	Zk      ZkResult
+	Details VerificationDetails
+}
+
+type VerificationDetails struct {
+	Fqdn           string
+	FqdnHash       string
+	MetadataJSON   string
+	MetadataHashP1 string
+	MetadataHashP2 string
+	TrustMethod    string
+	NullifierHash  string
+	Commitment     string
 }
 
 type DnsResult struct {
@@ -158,6 +221,39 @@ func (v *PTXVerifier) Verify() (*VerificationResult, error) {
 		res.Errors = append(res.Errors, "ZK proof invalid: "+res.Zk.Error)
 	}
 
+	// 5. Populate Details for verbose output
+	// Try to get nullifierHash and commitment from proof if possible
+	nullifierHash := ""
+	commitment := ""
+	proof := ptxFile.GetProof()
+	if proof != nil {
+		var pd struct {
+			PublicSignals []string `json:"publicSignals"`
+		}
+		if err := json.Unmarshal(proof.ProofData, &pd); err == nil && len(pd.PublicSignals) >= 2 {
+			nullifierHash = pd.PublicSignals[0]
+			commitment = pd.PublicSignals[1]
+		}
+	}
+
+	domain := ""
+	if ptxFile.GetDohDetails() != nil {
+		domain = ptxFile.GetDohDetails().GetDomainName()
+	}
+	fqdnHash, _ := crypto.PoseidonHashString(domain)
+	metaP1, metaP2 := crypto.SplitMetadataHash(metaRaw)
+
+	res.Details = VerificationDetails{
+		Fqdn:           domain,
+		FqdnHash:       fqdnHash.String(),
+		MetadataJSON:   metaRaw,
+		MetadataHashP1: metaP1.String(),
+		MetadataHashP2: metaP2.String(),
+		TrustMethod:    fmt.Sprintf("%d", ptxFile.GetTrustMethod()),
+		NullifierHash:  nullifierHash,
+		Commitment:     commitment,
+	}
+
 	return res, nil
 }
 
@@ -227,20 +323,15 @@ func (v *PTXVerifier) verifyProof(ptxFile *ptx.PtxFile, metaRaw string) ZkResult
 		return ZkResult{Skipped: true, Valid: false, Error: "Unsupported Proof System (only Groth16 supported)"}
 	}
 
-	// Parse Proof Data
-	// Extract public signals and inner proof
+	// Parse Proof Data to detect source
 	var wrapper struct {
+		Source        string          `json:"source"`
 		PublicSignals []string        `json:"publicSignals"`
 		Proof         json.RawMessage `json:"proof"`
+		ProofHex      string          `json:"proofHex"`
 	}
 	if err := json.Unmarshal(proof.ProofData, &wrapper); err != nil {
 		return ZkResult{Valid: false, Error: "Invalid proof wrapper JSON"}
-	}
-
-	// Parse Proof using circom2gnark
-	circomProof, err := parser.UnmarshalCircomProofJSON(wrapper.Proof)
-	if err != nil {
-		return ZkResult{Valid: false, Error: "Invalid inner proof JSON: " + err.Error()}
 	}
 
 	domain := ""
@@ -248,7 +339,7 @@ func (v *PTXVerifier) verifyProof(ptxFile *ptx.PtxFile, metaRaw string) ZkResult
 		domain = ptxFile.GetDohDetails().GetDomainName()
 	}
 
-	// Semantic Verification
+	// Semantic Verification (same for both proof types)
 	sig := signals.NewPTXSignals(domain, metaRaw, ptxFile.GetTrustMethod())
 	semVerify := sig.VerifyAgainstProof(wrapper.PublicSignals)
 
@@ -256,26 +347,38 @@ func (v *PTXVerifier) verifyProof(ptxFile *ptx.PtxFile, metaRaw string) ZkResult
 		return ZkResult{Valid: false, Semantic: false, Error: "Semantic verification failed"}
 	}
 
-	// Cryptographic Verification
-	// startTime := time.Now()
+	// Branch based on proof source
+	if wrapper.Source == "gnark_native" {
+		// For native Gnark proofs, re-derive public signals from PTX data
+		// Only nullifierHash and commitment come from the proof
+		return v.verifyNativeGnarkProof(wrapper.ProofHex, wrapper.PublicSignals, domain, metaRaw, ptxFile.GetTrustMethod())
+	}
+
+	// Fallback: Circom/snarkjs proof verification
+	return v.verifyCircomProof(wrapper.Proof, wrapper.PublicSignals)
+}
+
+func (v *PTXVerifier) verifyCircomProof(proofJSON json.RawMessage, publicSignals []string) ZkResult {
+	// Parse Proof using circom2gnark
+	circomProof, err := parser.UnmarshalCircomProofJSON(proofJSON)
+	if err != nil {
+		return ZkResult{Valid: false, Error: "Invalid inner proof JSON: " + err.Error()}
+	}
 
 	// Load VK (Circom format)
-	// We use verification_key.json as it contains necessary schema info for circom2gnark
 	circomVk, err := vk.LoadCircomKey("verification_key.json")
 	if err != nil {
 		return ZkResult{Valid: false, Error: "Failed to load VK: " + err.Error()}
 	}
 
 	// Convert everything to GnarkProof
-	// This helper handles witness construction from public signals using the VK schema
-	gnarkProof, err := parser.ConvertCircomToGnark(circomProof, circomVk, wrapper.PublicSignals)
+	gnarkProof, err := parser.ConvertCircomToGnark(circomProof, circomVk, publicSignals)
 	if err != nil {
 		return ZkResult{Valid: false, Error: "Circom to Gnark conversion failed: " + err.Error()}
 	}
-	startTime := time.Now()
-	// Verify using parser's helper
-	valid, err := parser.VerifyProof(gnarkProof)
 
+	startTime := time.Now()
+	valid, err := parser.VerifyProof(gnarkProof)
 	elapsed := time.Since(startTime).Seconds() * 1000
 
 	if err != nil {
@@ -286,4 +389,94 @@ func (v *PTXVerifier) verifyProof(ptxFile *ptx.PtxFile, metaRaw string) ZkResult
 	}
 
 	return ZkResult{Valid: true, Semantic: true, ProofTimeMs: elapsed}
+}
+
+func (v *PTXVerifier) verifyNativeGnarkProof(proofHex string, proofSignals []string, domain string, metaRaw string, trustMethod ptx.TrustMethod) ZkResult {
+	startTime := time.Now()
+
+	// Decode proof bytes from hex
+	proofBytes, err := hex.DecodeString(proofHex)
+	if err != nil {
+		return ZkResult{Valid: false, Error: "Failed to decode proof hex: " + err.Error()}
+	}
+
+	// Compile the same circuit to get the constraint system
+	var dohCircuit circuit.DoHCircuit
+	ccs, err := frontend.Compile(ecc.BN254.ScalarField(), r1cs.NewBuilder, &dohCircuit)
+	if err != nil {
+		return ZkResult{Valid: false, Error: "Circuit compilation failed: " + err.Error()}
+	}
+
+	// Load cached VK (must match the prover's VK)
+	gnarkVK, err := loadCachedVK(ccs)
+	if err != nil {
+		return ZkResult{Valid: false, Error: "Failed to load VK: " + err.Error()}
+	}
+
+	// Reconstruct the proof from bytes
+	proof := groth16.NewProof(ecc.BN254)
+	_, err = proof.ReadFrom(bytes.NewReader(proofBytes))
+	if err != nil {
+		return ZkResult{Valid: false, Error: "Failed to deserialize proof: " + err.Error()}
+	}
+
+	// RE-DERIVE public signals from PTX data (SECURITY CRITICAL)
+	// Only nullifierHash and commitment come from the proof
+	// fqdn, metadataHashP1, metadataHashP2, trustMethod are derived from PTX file
+
+	if len(proofSignals) < 2 {
+		return ZkResult{Valid: false, Error: "Insufficient public signals in proof (need nullifierHash and commitment)"}
+	}
+
+	// Get nullifierHash and commitment from proof (these are the actual proof outputs)
+	nullifierHash := proofSignals[0]
+	commitment := proofSignals[1]
+
+	// Re-derive fqdn hash using Poseidon (same as prover)
+	fqdnHash, err := crypto.PoseidonHashString(domain)
+	if err != nil {
+		return ZkResult{Valid: false, Error: "Failed to compute fqdn hash: " + err.Error()}
+	}
+
+	// Re-derive metadata hash parts
+	metaP1, metaP2 := crypto.SplitMetadataHash(metaRaw)
+
+	// Build public witness with re-derived signals
+	assignment := circuit.DoHCircuit{
+		NullifierHash:  fromStringV(nullifierHash),
+		Commitment:     fromStringV(commitment),
+		Fqdn:           fqdnHash,
+		MetadataHashP1: metaP1,
+		MetadataHashP2: metaP2,
+		TrustMethod:    int(trustMethod),
+		// Private inputs not needed for public witness
+		Nullifier: 0,
+		Secret:    0,
+	}
+
+	witness, err := frontend.NewWitness(&assignment, ecc.BN254.ScalarField())
+	if err != nil {
+		return ZkResult{Valid: false, Error: "Witness creation failed: " + err.Error()}
+	}
+
+	publicWitness, err := witness.Public()
+	if err != nil {
+		return ZkResult{Valid: false, Error: "Public witness extraction failed: " + err.Error()}
+	}
+
+	// Verify the proof
+	err = groth16.Verify(proof, gnarkVK, publicWitness)
+	elapsed := time.Since(startTime).Seconds() * 1000
+
+	if err != nil {
+		return ZkResult{Valid: false, Error: "Native Gnark verification failed: " + err.Error()}
+	}
+
+	return ZkResult{Valid: true, Semantic: true, ProofTimeMs: elapsed}
+}
+
+func fromStringV(s string) frontend.Variable {
+	var i big.Int
+	i.SetString(s, 10)
+	return i
 }

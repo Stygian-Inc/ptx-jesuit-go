@@ -1,7 +1,36 @@
-.history
-*.js
+# OS/Editor
+.DS_Store
+.history/
 
-*_amd64
-I*.md
-*.?s
+# Binaries
+/jesuit
+/jesuit_*
+/verify
+/verify_*
+/convert-keys
+
+# ZK-SNARK Artifacts
+*.wasm
+*.zkey
+*.ptau
+*.pk
+*.vk
+*.bin
+*.r1cs
+verification_key.json
+
+# Proof Files
 *.ptx
+
+# Benchmarking & Temporary Data
+*.csv
+bench_*
+comprehensive_fqdn_*
+dummy_proof.json
+hello.txt
+
+# Scripts & Reference
+parse_bench.py
+strip_colors.py
+reference_*
+crypto.ts

@@ -13,18 +13,20 @@ import (
 )
 
 var (
-	domain      string
-	fqdn        string
-	metadataStr string
-	metaHex     string
-	nullifier   string
-	secret      string
-	proofFile   string
-	outFile     string
-	trustMethod int
-	zkeyPath    string
-	wasmPath    string
-	r1csPath    string
+	domain        string
+	fqdn          string
+	metadataStr   string
+	metaHex       string
+	nullifier     string
+	secret        string
+	proofFile     string
+	outFile       string
+	trustMethod   int
+	zkeyPath      string
+	wasmPath      string
+	r1csPath      string
+	doBenchmark   bool
+	benchmarkRuns int
 )
 
 var proveCmd = &cobra.Command{
@@ -91,19 +93,51 @@ var proveCmd = &cobra.Command{
 		var proofData []byte
 
 		if zkeyPath != "" && wasmPath != "" {
-			fmt.Println("Generating ZK Proof using gnark...")
+			fmt.Println("Generating ZK Proof using gnark (snarkjs wrapper)...")
 			proofData, err = p.GenerateProof(inputs, wasmPath, zkeyPath)
 			if err != nil {
 				fmt.Printf("Error generating proof: %v\n", err)
 				os.Exit(1)
 			}
 			fmt.Println("Proof generated successfully!")
-			// If we generated proof internally, we populate proofData
 		} else if proofFile != "" {
 			proofData, err = ioutil.ReadFile(proofFile)
 			if err != nil {
 				fmt.Printf("Error reading proof file: %v\n", err)
 				os.Exit(1)
+			}
+		} else {
+			// Default to Native Go
+			if doBenchmark {
+				fmt.Printf("Starting benchmarking (native Gnark) for %d runs...\n", benchmarkRuns)
+				var totalCompile, totalWitness, totalProve float64
+
+				for i := 0; i < benchmarkRuns; i++ {
+					res, pData, err := p.BenchmarkNative(inputs)
+					if err != nil {
+						fmt.Printf("Benchmark run %d failed: %v\n", i+1, err)
+						os.Exit(1)
+					}
+					totalCompile += res.CompileTimeMs
+					totalWitness += res.WitnessTimeMs
+					totalProve += res.ProveTimeMs
+					proofData = pData // Keep the last one
+					fmt.Printf("Run %d/%d completed\n", i+1, benchmarkRuns)
+				}
+
+				fmt.Println("\n--- Proving Benchmarks (Average) ---")
+				fmt.Printf("Circuit Compilation: %.2f ms\n", totalCompile/float64(benchmarkRuns))
+				fmt.Printf("Witness Generation:  %.2f ms\n", totalWitness/float64(benchmarkRuns))
+				fmt.Printf("Proof Generation:    %.2f ms\n", totalProve/float64(benchmarkRuns))
+				fmt.Printf("Total Time:          %.2f ms\n", (totalCompile+totalWitness+totalProve)/float64(benchmarkRuns))
+			} else {
+				fmt.Println("No external artifacts provided. Using native Gnark prover...")
+				proofData, err = p.GenerateProofNative(inputs)
+				if err != nil {
+					fmt.Printf("Error generating native proof: %v\n", err)
+					os.Exit(1)
+				}
+				fmt.Println("Native Proof generated successfully!")
 			}
 		}
 
@@ -124,10 +158,8 @@ var proveCmd = &cobra.Command{
 			}
 			fmt.Printf("\nSuccessfully generated PTX file: %s\n", outFile)
 		} else {
-			fmt.Println("\nTip: To generate a full PTX file, provide:")
-			fmt.Println("     1. A proof file via --proof <proof.json>")
-			fmt.Println("     OR")
-			fmt.Println("     2. Circuit artifacts via --zkey <file.zkey> AND --wasm <file.wasm>")
+			// Since we default to native, this else might not be reached unless error?
+			// But logic above covers all cases now.
 		}
 	},
 }
@@ -144,7 +176,9 @@ func init() {
 	proveCmd.Flags().StringVar(&proofFile, "proof", "", "Path to snarkjs proof JSON file")
 	proveCmd.Flags().StringVar(&outFile, "out", "output.ptx", "Output path for the generated .ptx file")
 	proveCmd.Flags().IntVar(&trustMethod, "trustMethod", 1, "Trust method (1=DOH, 2=GIST)")
-	proveCmd.Flags().StringVar(&zkeyPath, "zkey", "", "Path to .zkey file for proof generation")
-	proveCmd.Flags().StringVar(&wasmPath, "wasm", "", "Path to .wasm file for witness generation")
-	proveCmd.Flags().StringVar(&r1csPath, "r1cs", "", "Path to .r1cs file (optional for some provers)")
+	proveCmd.Flags().StringVar(&zkeyPath, "zkey", "", "Path to .zkey file (optional, defaults to native Go prover)")
+	proveCmd.Flags().StringVar(&wasmPath, "wasm", "", "Path to .wasm file (optional, defaults to native Go prover)")
+	proveCmd.Flags().StringVar(&r1csPath, "r1cs", "", "Path to .r1cs file (optional)")
+	proveCmd.Flags().BoolVar(&doBenchmark, "benchmark", false, "Enable benchmarking")
+	proveCmd.Flags().IntVar(&benchmarkRuns, "benchmark-runs", 10, "Number of runs for benchmarking")
 }
