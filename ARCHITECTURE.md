@@ -37,12 +37,12 @@ A critical requirement for cross-compatibility was matching the `poseidon.circom
 - Implementation of `PoseidonEx` logic for handling inputs of varying lengths.
 
 ### 3. Unified Verifier (`pkg/verifier`)
-The verifier is designed to be extensible. When checking a proof, it:
-1. Unmarshals a JSON wrapper to determine the `source` (`gnark_native` or legacy).
-2. Performs **Semantic Verification**: it re-calculates what the public signals *should* be based on the metadata and domain specified in the PTX file.
+The verifier is designed to be extensible but currently strictly enforces **Native Go Proofs**. When checking a proof, it:
+1. Unmarshals a JSON wrapper to determine the `source`.
+2. Re-calculates what the public signals *should* be based on the metadata and domain specified in the PTX file (Semantic Verification).
 3. Performs **Cryptographic Verification**:
-   - For `gnark_native`, it compiles the circuit on-the-fly (or loads cached R1CS) and verifies using Groth16.
-   - For legacy proofs, it uses `circom2gnark` translation to verify Circom proofs within the Go environment.
+   - It only accepts `gnark_native` proofs.
+   - It compiles the circuit (or loads cached R1CS) and verifies the Groth16 proof using the re-derived public witness.
 
 ### 4. Benchmarking Engine
 The benchmarking system is integrated directly into the `Prover` and `Verifier` structs. It captures:

@@ -37,7 +37,6 @@ message PtxFile {
   // The specific message used here MUST correspond to the 'trust_method'.
   oneof anchor {
     DohAnchor doh_details = 4;
-    GistAnchor gist_details = 5;
     // Future anchor methods can be added here without breaking compatibility.
   }
 
@@ -104,10 +103,4 @@ message IssuerSignature {
 message DohAnchor {
   // The fully qualified domain name that anchors the proof, e.g., "example.com".
   string domain_name = 1;
-}
-
-// GistAnchor contains the details required for the GIST (GitHub Gist) trust method.
-message GistAnchor {
-  // The full URL of the public gist, e.g., "https://gist.github.com/user/id".
-  string gist_url = 1;
 }

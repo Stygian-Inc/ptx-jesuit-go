@@ -34,3 +34,6 @@ parse_bench.py
 strip_colors.py
 reference_*
 crypto.ts
+
+./cmd/verify
+./cmd/verify/*

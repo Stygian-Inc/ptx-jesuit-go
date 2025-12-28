@@ -71,5 +71,5 @@ func DeriveHostnameFromCommitment(commitmentStr string, domain string) (string, 
 	// 4. Base27 of hash
 	encoded := Base27(hashHex)
 
-	return fmt.Sprintf("x%sx.%s", encoded, domain), nil
+	return fmt.Sprintf("x-%s.%s", encoded, domain), nil
 }

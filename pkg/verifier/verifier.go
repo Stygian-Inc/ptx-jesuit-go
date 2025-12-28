@@ -17,14 +17,12 @@ import (
 	"github.com/Stygian-Inc/ptx-jesuit-go/pkg/ptxloader"
 	"github.com/Stygian-Inc/ptx-jesuit-go/pkg/signals"
 	"github.com/Stygian-Inc/ptx-jesuit-go/pkg/utils"
-	"github.com/Stygian-Inc/ptx-jesuit-go/pkg/vk"
 	"github.com/Stygian-Inc/ptx-jesuit-go/ptx"
 	"github.com/consensys/gnark-crypto/ecc"
 	"github.com/consensys/gnark/backend/groth16"
 	"github.com/consensys/gnark/constraint"
 	"github.com/consensys/gnark/frontend"
 	"github.com/consensys/gnark/frontend/cs/r1cs"
-	"github.com/vocdoni/circom2gnark/parser"
 )
 
 const nativeVKPath = "native.vk"
@@ -354,41 +352,7 @@ func (v *PTXVerifier) verifyProof(ptxFile *ptx.PtxFile, metaRaw string) ZkResult
 		return v.verifyNativeGnarkProof(wrapper.ProofHex, wrapper.PublicSignals, domain, metaRaw, ptxFile.GetTrustMethod())
 	}
 
-	// Fallback: Circom/snarkjs proof verification
-	return v.verifyCircomProof(wrapper.Proof, wrapper.PublicSignals)
-}
-
-func (v *PTXVerifier) verifyCircomProof(proofJSON json.RawMessage, publicSignals []string) ZkResult {
-	// Parse Proof using circom2gnark
-	circomProof, err := parser.UnmarshalCircomProofJSON(proofJSON)
-	if err != nil {
-		return ZkResult{Valid: false, Error: "Invalid inner proof JSON: " + err.Error()}
-	}
-
-	// Load VK (Circom format)
-	circomVk, err := vk.LoadCircomKey("verification_key.json")
-	if err != nil {
-		return ZkResult{Valid: false, Error: "Failed to load VK: " + err.Error()}
-	}
-
-	// Convert everything to GnarkProof
-	gnarkProof, err := parser.ConvertCircomToGnark(circomProof, circomVk, publicSignals)
-	if err != nil {
-		return ZkResult{Valid: false, Error: "Circom to Gnark conversion failed: " + err.Error()}
-	}
-
-	startTime := time.Now()
-	valid, err := parser.VerifyProof(gnarkProof)
-	elapsed := time.Since(startTime).Seconds() * 1000
-
-	if err != nil {
-		return ZkResult{Valid: false, Error: "Verification failed: " + err.Error()}
-	}
-	if !valid {
-		return ZkResult{Valid: false, Error: "Verification returned false"}
-	}
-
-	return ZkResult{Valid: true, Semantic: true, ProofTimeMs: elapsed}
+	return ZkResult{Valid: false, Error: "Unsupported proof source (legacy Circom proofs no longer supported)"}
 }
 
 func (v *PTXVerifier) verifyNativeGnarkProof(proofHex string, proofSignals []string, domain string, metaRaw string, trustMethod ptx.TrustMethod) ZkResult {
