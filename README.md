@@ -24,7 +24,7 @@ Before building Jesuit, ensure your environment meets the following requirements
 - **Go**: `v1.25.3` or higher
 - **Redis**: `v8.4.0` or higher (Required for nonce management and state tracking)
 - **Protobuf**: `libprotoc 33.2` or higher (For compiling `.proto` definitions)
-- **macOS**: Optimized for Darwin/ARM64 and Darwin/AMD64.
+- Optimized for Darwin/ARM64, Darwin/AMD64 and Linux/AMD64.
 
 ---
 
@@ -86,7 +86,7 @@ Stress-test the system by varying input parameters like FQDN length or metadata 
 
 ---
 
-## 🏗 Architecture
+## Architecture
 
 Jesuit is organized into modular packages for clarity and extensibility:
 
